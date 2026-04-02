@@ -4,8 +4,10 @@ from app.services.integrations.dummy_intel import (
     fetch_dummy_virustotal_data,
     fetch_dummy_alienvault_data,
     fetch_dummy_mitre_ttps,
-    fetch_dummy_actors
+    fetch_dummy_actors,
 )
+from app.services.utils import extract_domain_from_url
+
 
 async def analyze_ip(ip_address: str) -> RiskReport:
     """
@@ -16,29 +18,29 @@ async def analyze_ip(ip_address: str) -> RiskReport:
     av_task = fetch_dummy_alienvault_data(ip_address)
     ttps_task = fetch_dummy_mitre_ttps(ip_address)
     actors_task = fetch_dummy_actors(ip_address)
-    
+
     vt_result, av_result, ttps_result, actors_result = await asyncio.gather(
         vt_task, av_task, ttps_task, actors_task
     )
-    
+
     # Simple Risk Scoring Engine
     risk_score = 0
-    
+
     # Source 1: Virustotal ratio
     if vt_result.total_votes > 0:
         ratio = vt_result.malicious_votes / vt_result.total_votes
-        risk_score += (ratio * 60) # VT contributes up to 60 points
-        
+        risk_score += ratio * 60  # VT contributes up to 60 points
+
     # Source 2: Alienvault mentions
     if av_result.malicious_votes > 0:
-        risk_score += 30 # AV contributes 30 points if it flags it
-        
+        risk_score += 30  # AV contributes 30 points if it flags it
+
     # Source 3: Known APT actors
     if len(actors_result) > 0:
-        risk_score += 10 # APT association is severe, +10 points
-        
-    risk_score = min(int(risk_score), 100) # Cap at 100
-    
+        risk_score += 10  # APT association is severe, +10 points
+
+    risk_score = min(int(risk_score), 100)  # Cap at 100
+
     # Determine severity label
     if risk_score == 0:
         severity = "Low"
@@ -61,5 +63,73 @@ async def analyze_ip(ip_address: str) -> RiskReport:
         sources=[vt_result, av_result],
         mitre_ttps=ttps_result,
         associated_actors=actors_result,
-        summary=summary
+        summary=summary,
+    )
+
+
+async def analyze_url(url: str) -> RiskReport:
+    """
+    Analyzes a URL by extracting the domain and analyzing it.
+    Currently uses the domain as the observable for threat intelligence lookup.
+
+    Args:
+        url: Full URL (e.g., https://example.com/path) or domain (e.g., example.com)
+
+    Returns:
+        RiskReport: Threat analysis report for the domain
+    """
+    # Extract domain from URL
+    domain = extract_domain_from_url(url)
+
+    # Fetch data concurrently from all sources for speed
+    vt_task = fetch_dummy_virustotal_data(domain)
+    av_task = fetch_dummy_alienvault_data(domain)
+    ttps_task = fetch_dummy_mitre_ttps(domain)
+    actors_task = fetch_dummy_actors(domain)
+
+    vt_result, av_result, ttps_result, actors_result = await asyncio.gather(
+        vt_task, av_task, ttps_task, actors_task
+    )
+
+    # Simple Risk Scoring Engine
+    risk_score = 0
+
+    # Source 1: Virustotal ratio
+    if vt_result.total_votes > 0:
+        ratio = vt_result.malicious_votes / vt_result.total_votes
+        risk_score += ratio * 60  # VT contributes up to 60 points
+
+    # Source 2: Alienvault mentions
+    if av_result.malicious_votes > 0:
+        risk_score += 30  # AV contributes 30 points if it flags it
+
+    # Source 3: Known APT actors
+    if len(actors_result) > 0:
+        risk_score += 10  # APT association is severe, +10 points
+
+    risk_score = min(int(risk_score), 100)  # Cap at 100
+
+    # Determine severity label
+    if risk_score == 0:
+        severity = "Low"
+        summary = "No malicious activity detected. Safe domain."
+    elif risk_score < 40:
+        severity = "Medium"
+        summary = "Some suspicious indicators found. Monitor activity."
+    elif risk_score < 80:
+        severity = "High"
+        summary = "Malicious activity confirmed by multiple sources."
+    else:
+        severity = "Critical"
+        summary = "Critical threat! Known malicious domain or widespread phishing infrastructure."
+
+    return RiskReport(
+        observable=domain,
+        observable_type=ObservableType.DOMAIN,
+        overall_risk_score=risk_score,
+        severity=severity,
+        sources=[vt_result, av_result],
+        mitre_ttps=ttps_result,
+        associated_actors=actors_result,
+        summary=summary,
     )
